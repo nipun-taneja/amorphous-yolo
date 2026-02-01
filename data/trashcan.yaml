@@ -1,4 +1,4 @@
-path: /content/amorphous-yolo/amorphous-yolo/datasets/trashcan
+path: /content/amorphous-yolo/datasets/trashcan
 train: images/train
 val: images/val
 names:
