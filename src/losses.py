@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 
-def _bbox_iou_xyxy(pred_boxes, target_boxes, eps=1e-7):
+
+def _bbox_iou_xyxy(pred_boxes, target_boxes, eps: float = 1e-7):
     """
-    Basic IoU in xyxy format, just to make the loss callable.
+    Basic IoU in xyxy format.
     pred_boxes, target_boxes: (..., 4) with [x1, y1, x2, y2].
     """
     x1 = torch.max(pred_boxes[..., 0], target_boxes[..., 0])
@@ -26,8 +27,7 @@ def _bbox_iou_xyxy(pred_boxes, target_boxes, eps=1e-7):
 
 class EIoULoss(nn.Module):
     """
-    Placeholder: right now this behaves like (1 - IoU).
-    Later you'll extend it to full EIoU / A-EIoU math.
+    Placeholder version: behaves like (1 - IoU) loss.
     """
     def __init__(self, reduction: str = "mean"):
         super().__init__()
@@ -35,7 +35,7 @@ class EIoULoss(nn.Module):
 
     def forward(self, pred_boxes, target_boxes):
         iou = _bbox_iou_xyxy(pred_boxes, target_boxes)
-        loss = 1.0 - iou  # placeholder
+        loss = 1.0 - iou
         if self.reduction == "mean":
             return loss.mean()
         if self.reduction == "sum":
@@ -45,7 +45,7 @@ class EIoULoss(nn.Module):
 
 class AEIoULoss(nn.Module):
     """
-    Another placeholder variant; you can differentiate later.
+    Another placeholder; here we just square the (1 - IoU) term.
     """
     def __init__(self, reduction: str = "mean"):
         super().__init__()
@@ -53,7 +53,7 @@ class AEIoULoss(nn.Module):
 
     def forward(self, pred_boxes, target_boxes):
         iou = _bbox_iou_xyxy(pred_boxes, target_boxes)
-        loss = (1.0 - iou) ** 2  # example variant
+        loss = (1.0 - iou) ** 2
         if self.reduction == "mean":
             return loss.mean()
         if self.reduction == "sum":
