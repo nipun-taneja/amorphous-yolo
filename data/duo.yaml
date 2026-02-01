@@ -1,0 +1,15 @@
+path: /content/amorphous-yolo/DUO-dataset-1
+
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 4
+names: ['echinus', 'holothurian', 'scallop', 'starfish']
+
+roboflow:
+  workspace: amorphousyolo
+  project: duo-dataset-ofte9
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/amorphousyolo/duo-dataset-ofte9/dataset/1
