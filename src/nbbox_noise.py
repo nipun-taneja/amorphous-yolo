@@ -1,11 +1,13 @@
-from pathlib import Path
 import math
 import random
+import shutil
+from pathlib import Path
+
 
 def _quad_to_xywh(coords):
     """
     coords: list/tuple of 8 floats [x1,y1,x2,y2,x3,y3,x4,y4] in normalized [0,1].
-    Return xc,yc,w,h (normalized).
+    Return (xc, yc, w, h) in normalized coords.
     """
     xs = coords[0::2]
     ys = coords[1::2]
@@ -20,7 +22,7 @@ def _quad_to_xywh(coords):
 
 def _xywh_to_quad(xc, yc, w, h):
     """
-    Given xc,yc,w,h in [0,1], return axis-aligned quad
+    Given (xc, yc, w, h) in [0,1], return axis-aligned quad
     [x1,y1,x2,y2,x3,y3,x4,y4] (clockwise).
     """
     x_min = xc - w / 2.0
@@ -46,9 +48,9 @@ def make_noisy_labels(src_labels_dir: Path,
     DUO-style polygon labels:
       cls x1 y1 x2 y2 x3 y3 x4 y4
 
-    We:
-      - convert quad -> (xc,yc,w,h)
-      - apply noise in (xc,yc,w,h)
+    Pipeline:
+      - convert quad -> (xc, yc, w, h)
+      - apply noise in (xc, yc, w, h)
       - convert back to quad and write same format.
     """
     if rng_seed is not None:
@@ -70,7 +72,7 @@ def make_noisy_labels(src_labels_dir: Path,
 
                 xc, yc, w, h = _quad_to_xywh(coords)
 
-                # jitter in (xc,yc,w,h)
+                # jitter in (xc, yc, w, h)
                 dx = random.gauss(0.0, sigma_pos_x) * w
                 dy = random.gauss(0.0, sigma_pos_y) * h
                 fx = math.exp(random.gauss(0.0, sigma_w))
@@ -95,3 +97,75 @@ def make_noisy_labels(src_labels_dir: Path,
         out_path = dst_labels_dir / txt_path.name
         with open(out_path, "w") as f:
             f.writelines(lines_out)
+
+
+def make_symlink_or_copy_images(src_images_dir: Path, dst_images_dir: Path):
+    """
+    Create dst_images_dir containing either symlinks or copies of images.
+    Symlinks keep disk usage low; fallback to copy if symlinks not allowed.
+    """
+    dst_images_dir.mkdir(parents=True, exist_ok=True)
+    for img_path in sorted(src_images_dir.glob("*")):
+        if not img_path.is_file():
+            continue
+        dst_path = dst_images_dir / img_path.name
+        if dst_path.exists():
+            continue
+        try:
+            # symlink for efficiency
+            dst_path.symlink_to(img_path)
+        except OSError:
+            # fallback: copy
+            shutil.copy2(img_path, dst_path)
+
+
+def build_duo_noise_splits(root: Path):
+    """
+    root: /content/amorphous-yolo/datasets/DUO_dataset
+
+    Creates:
+      - valid      (existing, clean)
+      - valid_low  (new, low noise)
+      - valid_high (new, high noise)
+
+    Each with images/ and labels/.
+    Images are shared via symlink/copy; labels are jittered.
+    """
+    src_images = root / "valid" / "images"
+    src_labels = root / "valid" / "labels"
+
+    # Targets
+    valid_low_images = root / "valid_low" / "images"
+    valid_low_labels = root / "valid_low" / "labels"
+
+    valid_high_images = root / "valid_high" / "images"
+    valid_high_labels = root / "valid_high" / "labels"
+
+    # Share images by symlink/copy
+    make_symlink_or_copy_images(src_images, valid_low_images)
+    make_symlink_or_copy_images(src_images, valid_high_images)
+
+    # Low noise: σ_pos = 0.02, σ_size = 0.02
+    make_noisy_labels(
+        src_labels_dir=src_labels,
+        dst_labels_dir=valid_low_labels,
+        sigma_pos_x=0.02,
+        sigma_pos_y=0.02,
+        sigma_w=0.02,
+        sigma_h=0.02,
+    )
+
+    # High noise: σ_pos = 0.05, σ_size = (0.05, 0.10)
+    make_noisy_labels(
+        src_labels_dir=src_labels,
+        dst_labels_dir=valid_high_labels,
+        sigma_pos_x=0.05,
+        sigma_pos_y=0.05,
+        sigma_w=0.05,
+        sigma_h=0.10,
+    )
+
+
+if __name__ == "__main__":
+    ROOT = Path("/content/amorphous-yolo/datasets/DUO_dataset")
+    build_duo_noise_splits(ROOT)
