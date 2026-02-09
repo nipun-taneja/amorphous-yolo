@@ -1,0 +1,10 @@
+path: /content/amorphous-yolo/datasets/DUO_dataset
+
+train: train/images
+val: valid/images
+
+names:
+  0: echinus
+  1: holothurian
+  2: scallop
+  3: starfish
