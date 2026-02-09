@@ -1,4 +1,4 @@
-path: /content/amorphous-yolo/DUO-dataset-1
+path: /content/amorphous-yolo/datasets/DUO_dataset
 
 train: train/images
 val: valid/images
