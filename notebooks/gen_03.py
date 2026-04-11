@@ -114,6 +114,15 @@ MANIFEST_PATH = EXPERIMENTS / "manifest.json"
 EXPERIMENTS.mkdir(parents=True, exist_ok=True)
 ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
 
+# ── Google Drive persistence ───────────────────────────────────────────────────
+# Results are synced to Drive after EVERY run so a Colab timeout only loses
+# the run currently in progress — all completed runs are safe.
+# On session restart, restore_from_drive() copies completed runs back so the
+# skip-on-existing logic prevents re-running them.
+DRIVE_ROOT        = Path("/content/drive/MyDrive/amorphous_yolo")
+DRIVE_EXPERIMENTS = DRIVE_ROOT / "experiments_kvasir"
+DRIVE_AVAILABLE   = False   # set to True by mount_drive() below
+
 # ── Training hyper-parameters ─────────────────────────────────────────────────
 EPOCHS   = 20     # Sufficient for convergence comparison at nano scale
 IMGSZ    = 640    # Standard YOLO input resolution
@@ -203,14 +212,97 @@ of the three splits. If counts differ, the split or download step failed.
 ))
 
 cells.append(code(
-"""# --- WandB login (optional; silently skipped if no API key)
-# Remove the try/except to force login if you want W&B tracking.
+"""# --- WandB setup — proper login with project configuration
+# WANDB_API_KEY must be set as a Colab secret (Secrets panel, left sidebar).
+# If not set, WandB is disabled so training still runs without hanging.
+import os, wandb
+
+# Project name used for all runs in this notebook
+WANDB_PROJECT = "amorphous-yolo-kvasir"
+
+# Try to read API key from Colab secrets first (most secure), then fall back
+# to an existing environment variable set before this cell ran.
 try:
-    import wandb
-    wandb.login(anonymous="allow", relogin=False)
-    print("WandB: logged in (or anonymous mode).")
-except Exception as e:
-    print(f"WandB: skipped ({e})")
+    from google.colab import userdata
+    api_key = userdata.get("WANDB_API_KEY")
+    if api_key:
+        os.environ["WANDB_API_KEY"] = api_key
+        print("WandB API key loaded from Colab secrets.")
+except Exception:
+    pass   # not in Colab or secret not set
+
+if os.environ.get("WANDB_API_KEY"):
+    wandb.login(key=os.environ["WANDB_API_KEY"], relogin=False)
+    print(f"WandB logged in. Project: {WANDB_PROJECT}")
+else:
+    os.environ["WANDB_MODE"] = "disabled"
+    print("WANDB_API_KEY not found — WandB disabled.")
+    print("To enable: add WANDB_API_KEY in Colab Secrets (key icon, left sidebar).")
+"""
+))
+
+cells.append(md(
+"""### Google Drive: Mount, Restore & Persist
+
+Results are written to Drive **after every training run** so a Colab timeout
+only loses the run currently in progress. On session restart, completed runs
+are restored from Drive so the notebook resumes exactly where it left off.
+
+**What to look for:** The restore step should print a list of run names copied
+back from Drive. These runs will show `[SKIP]` in the training cells below,
+meaning no computation is wasted repeating them.
+
+**Setup:** Drive will be mounted automatically below. If it fails (e.g. running
+locally), training still works — Drive sync is silently skipped.
+"""
+))
+
+cells.append(code(
+"""# --- Google Drive: mount + restore completed runs from previous sessions
+import shutil
+
+def mount_drive():
+    # Mount Google Drive and set DRIVE_AVAILABLE = True if successful.
+    global DRIVE_AVAILABLE
+    try:
+        from google.colab import drive
+        drive.mount("/content/drive", force_remount=False)
+        DRIVE_EXPERIMENTS.mkdir(parents=True, exist_ok=True)
+        DRIVE_AVAILABLE = True
+        print(f"Drive mounted. Backup dir: {DRIVE_EXPERIMENTS}")
+    except Exception as e:
+        print(f"Drive not available ({e}). Running without Drive persistence.")
+        DRIVE_AVAILABLE = False
+    return DRIVE_AVAILABLE
+
+
+def restore_from_drive():
+    # Copy completed runs from Drive back to local EXPERIMENTS dir.
+    # Called once at session start so skip-on-existing logic works correctly
+    # even after a Colab timeout/restart.
+    if not DRIVE_AVAILABLE:
+        return
+    if not DRIVE_EXPERIMENTS.exists():
+        print("No Drive backup found yet — starting fresh.")
+        return
+    restored = 0
+    for drive_run in sorted(DRIVE_EXPERIMENTS.iterdir()):
+        if not drive_run.is_dir():
+            continue
+        local_run = EXPERIMENTS / drive_run.name
+        # Only restore runs that completed (have results.csv) and aren't already local
+        if (drive_run / "results.csv").exists() and not (local_run / "results.csv").exists():
+            shutil.copytree(str(drive_run), str(local_run), dirs_exist_ok=True)
+            restored += 1
+            print(f"  [RESTORE] {drive_run.name}")
+    if restored == 0:
+        print("Nothing to restore — local experiments are up to date.")
+    else:
+        print(f"Restored {restored} completed run(s) from Drive.")
+
+
+mount_drive()
+restore_from_drive()
 """
 ))
 
