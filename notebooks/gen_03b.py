@@ -229,23 +229,38 @@ training progress bar. `[SKIP]` means the run was already completed — safe to 
     ))
 
     cells.append(code(
-"""# --- Training functions: run_training + write_manifest_entry
-import json
+"""# --- Training functions: run_training + write_manifest_entry + sync_to_drive
+import json, shutil
 from datetime import datetime
 from ultralytics import YOLO
 
 def _load_manifest():
-    \"\"\"Load manifest.json as a dict, or return empty dict if not present.\"\"\"
+    # Load manifest.json as a dict, or return empty dict if not present.
     if MANIFEST_PATH.exists():
         return json.loads(MANIFEST_PATH.read_text())
     return {}
 
 
 def write_manifest_entry(run_name, meta):
-    \"\"\"Atomically update manifest.json with the entry for run_name.\"\"\"
+    # Atomically update manifest.json with the entry for run_name.
     manifest = _load_manifest()
     manifest[run_name] = meta
     MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
+
+
+def sync_to_drive(run_name):
+    # Copy a single completed run directory from local storage to Google Drive.
+    # Called in run_training()'s finally block so every run is persisted
+    # immediately — a Colab timeout after this point loses nothing.
+    if not DRIVE_AVAILABLE:
+        return
+    local_run = EXPERIMENTS / run_name
+    drive_run = DRIVE_EXPERIMENTS / run_name
+    try:
+        shutil.copytree(str(local_run), str(drive_run), dirs_exist_ok=True)
+        print(f"  [DRIVE] Synced {run_name}")
+    except Exception as e:
+        print(f"  [DRIVE] Sync failed for {run_name}: {e}")
 
 
 def run_training(loss_name, loss_fn, split_name, yaml_path,
@@ -294,6 +309,13 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
     write_manifest_entry(run_name, meta)
 
     try:
+        # Name this run in WandB before training starts so it appears correctly
+        # in the dashboard even if the session is interrupted mid-run.
+        import os as _os
+        _os.environ["WANDB_PROJECT"] = WANDB_PROJECT
+        _os.environ["WANDB_NAME"]    = run_name
+        _os.environ["WANDB_TAGS"]    = f"{loss_name},{split_name}"
+
         # Apply our custom loss to BboxLoss.forward
         patch_loss(loss_fn)
 
@@ -318,6 +340,15 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
 
         meta["status"] = "complete"
 
+        # Explicitly finish the WandB run so metrics are fully uploaded
+        # before we move to the next training run.
+        try:
+            import wandb as _wandb
+            if _wandb.run is not None:
+                _wandb.finish()
+        except Exception:
+            pass
+
     except Exception as e:
         print(f"  [ERROR] {run_name} failed: {e}")
         meta["status"] = "failed"
@@ -328,6 +359,9 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
         # CRITICAL: always restore — never leave Ultralytics in patched state
         restore_loss()
         write_manifest_entry(run_name, meta)
+        # Sync this run to Drive immediately — protects against future timeouts.
+        # A Colab crash after this line loses at most the next run, never this one.
+        sync_to_drive(run_name)
 
     print(f"[DONE] {run_name}")
     return run_dir
@@ -1579,25 +1613,33 @@ print("\\nAll artifacts saved successfully.")
     ))
 
     cells.append(code(
-"""# --- Google Drive backup (silent skip if not mounted)
-# Copies the entire experiments_kvasir/ directory to Drive for persistence
-# across Colab sessions. Safe to re-run — rsync-style: only copies new files.
-import shutil, os
+"""# --- Final sync: push analysis figures and manifest to Drive
+# Individual run directories were already synced after each training run (in finally block).
+# This final cell ensures the analysis figures and summary CSVs are also saved to Drive.
+import shutil
 
-DRIVE_BACKUP = Path("/content/drive/MyDrive/amorphous_yolo/experiments_kvasir")
+if DRIVE_AVAILABLE:
+    # Sync analysis figures directory
+    drive_analysis = DRIVE_EXPERIMENTS / "analysis"
+    drive_analysis.mkdir(parents=True, exist_ok=True)
+    if ANALYSIS_DIR.exists():
+        shutil.copytree(str(ANALYSIS_DIR), str(drive_analysis), dirs_exist_ok=True)
+        n_figs = len(list(drive_analysis.glob("*.png")))
+        print(f"Analysis figures synced to Drive: {n_figs} PNGs")
 
-try:
-    from google.colab import drive
-    drive.mount("/content/drive", force_remount=False)
+    # Sync manifest and combined results CSV
+    for fname in ["manifest.json", "all_results_combined.csv"]:
+        src = EXPERIMENTS / fname
+        if src.exists():
+            shutil.copy2(str(src), str(DRIVE_EXPERIMENTS / fname))
+            print(f"  Synced {fname}")
 
-    DRIVE_BACKUP.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(str(EXPERIMENTS), str(DRIVE_BACKUP), dirs_exist_ok=True)
-    print(f"Backed up to: {DRIVE_BACKUP}")
-    n_files = sum(1 for _ in DRIVE_BACKUP.rglob("*") if _.is_file())
-    print(f"  {n_files} files in backup directory.")
-except Exception as e:
-    print(f"Drive backup skipped: {e}")
-    print("(This is expected outside Google Colab or if Drive is not mounted.)")
+    print(f"\\nAll artifacts backed up to: {DRIVE_EXPERIMENTS}")
+    n_total = sum(1 for _ in DRIVE_EXPERIMENTS.rglob("*") if _.is_file())
+    print(f"Total files on Drive: {n_total}")
+else:
+    print("Drive not mounted — skipping final sync.")
+    print("Tip: Run mount_drive() and re-run this cell to back up manually.")
 
 print("\\nNotebook 03 complete.")
 """
