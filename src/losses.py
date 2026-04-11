@@ -290,6 +290,134 @@ class ECIoULoss(nn.Module):
         return _apply_reduction(loss, self.reduction)
 
 
+class SIoULoss(nn.Module):
+    """
+    Shape-aware IoU loss — Gevorgyan, arXiv 2022 (https://arxiv.org/abs/2205.12740).
+
+    L = 1 − IoU + (Λ + Ω) / 2
+
+    where:
+        Λ (distance cost) = 2 − exp(γ·ρ_x) − exp(γ·ρ_y)
+            • ρ_x, ρ_y: normalized center-axis distances (relative to enclosing box dims)
+            • γ = angle_cost − 2, encoding how mis-aligned the predicted box is
+        Ω (shape cost) = Σ (1 − exp(−ω_d))^θ  for d ∈ {w, h}
+            • ω_d = |pred_d − tgt_d| / max(pred_d, tgt_d)  — normalised dim error
+            • θ = 4 (sharpens the penalty near zero error)
+
+    Key idea: the angle between the center-offset vector and the nearest GT axis
+    modulates how strongly center distance is penalised. If the prediction is
+    already moving toward the target along the dominant axis, the penalty is softer.
+    This makes gradient flow smoother and improves convergence direction.
+    """
+
+    def __init__(self, reduction: str = "mean", eps: float = 1e-7):
+        super().__init__()
+        self.reduction = reduction
+        self.eps = eps
+
+    def forward(self, pred_boxes, target_boxes):
+        eps = self.eps
+        iou = _bbox_iou_xyxy(pred_boxes, target_boxes, eps=eps)
+
+        # Centers and absolute differences
+        pcx = (pred_boxes[..., 0] + pred_boxes[..., 2]) * 0.5
+        pcy = (pred_boxes[..., 1] + pred_boxes[..., 3]) * 0.5
+        tcx = (target_boxes[..., 0] + target_boxes[..., 2]) * 0.5
+        tcy = (target_boxes[..., 1] + target_boxes[..., 3]) * 0.5
+
+        abs_dx = torch.abs(tcx - pcx)
+        abs_dy = torch.abs(tcy - pcy)
+        sigma  = torch.sqrt(abs_dx ** 2 + abs_dy ** 2 + eps)  # center distance ρ
+
+        # Angle cost ─────────────────────────────────────────────────────────
+        # sin of angle between the center-offset vector and the *nearest* axis.
+        # sin_alpha_1 = |Δy|/ρ  (angle with horizontal axis)
+        # sin_alpha_2 = |Δx|/ρ  (angle with vertical axis)
+        # Pick the smaller angle (angle closest to one of the box axes).
+        sin_alpha_1 = abs_dy / sigma
+        sin_alpha_2 = abs_dx / sigma
+        threshold   = (2.0 ** 0.5) / 2.0   # sin(45°) ≈ 0.7071
+        sin_alpha   = torch.where(sin_alpha_1 <= threshold, sin_alpha_1, sin_alpha_2)
+
+        # angle_cost ∈ [0, 1]:  0 when perfectly axis-aligned, 1 at 45° offset
+        # Using: cos(arcsin(x)·2 − π/2) = sin(2·arcsin(x)) = 2·x·√(1−x²)
+        cos_alpha   = torch.sqrt((1.0 - sin_alpha ** 2).clamp(min=eps))
+        angle_cost  = torch.cos(torch.asin(sin_alpha) * 2.0 - math.pi / 2.0)
+
+        # Distance cost ───────────────────────────────────────────────────────
+        _, _, _, _, cw, ch, _ = _enclosing_box(pred_boxes, target_boxes, eps=eps)
+        rho_x = (abs_dx / (cw + eps)) ** 2
+        rho_y = (abs_dy / (ch + eps)) ** 2
+        gamma  = angle_cost - 2.0   # ∈ [−2, 0]; more negative → faster decay
+        distance_cost = 2.0 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
+
+        # Shape cost ──────────────────────────────────────────────────────────
+        pw = (pred_boxes[..., 2] - pred_boxes[..., 0]).clamp(min=eps)
+        ph = (pred_boxes[..., 3] - pred_boxes[..., 1]).clamp(min=eps)
+        tw = (target_boxes[..., 2] - target_boxes[..., 0]).clamp(min=eps)
+        th = (target_boxes[..., 3] - target_boxes[..., 1]).clamp(min=eps)
+
+        omega_w = torch.abs(pw - tw) / (torch.max(pw, tw) + eps)
+        omega_h = torch.abs(ph - th) / (torch.max(ph, th) + eps)
+        theta   = 4
+        shape_cost = (
+            torch.pow(1.0 - torch.exp(-omega_w), theta)
+            + torch.pow(1.0 - torch.exp(-omega_h), theta)
+        )
+
+        loss = 1.0 - iou + (distance_cost + shape_cost) / 2.0
+        return _apply_reduction(loss, self.reduction)
+
+
+class WIoULoss(nn.Module):
+    """
+    Wise IoU loss v1 — Tong et al., arXiv 2023 (https://arxiv.org/abs/2301.10051).
+
+    L = β · (1 − IoU)
+
+    where:
+        β = exp(ρ² / c²)   — wise focusing coefficient
+
+    β up-weights examples whose predicted center is far from the GT center
+    (relative to the enclosing-box diagonal). This acts as a dynamic hard-example
+    miner: poorly localised predictions receive a larger gradient signal, pulling
+    the network away from mediocre local minima that plain IoU loss can settle into.
+
+    Unlike DIoU, WIoU does NOT add ρ²/c² as an additive term; instead it *scales*
+    the overlap loss by it. The effect is a loss landscape that naturally de-emphasises
+    near-perfect predictions (small ρ → β ≈ 1) and strongly emphasises outliers
+    (large ρ → β >> 1).
+
+    Note: This is WIoU v1 (static focusing coefficient). WIoU v3 requires a running
+    mean of the loss and is not implemented here for simplicity.
+    """
+
+    def __init__(self, reduction: str = "mean", eps: float = 1e-7):
+        super().__init__()
+        self.reduction = reduction
+        self.eps = eps
+
+    def forward(self, pred_boxes, target_boxes):
+        eps = self.eps
+        iou = _bbox_iou_xyxy(pred_boxes, target_boxes, eps=eps)
+
+        # Center distance ρ²
+        pcx = (pred_boxes[..., 0] + pred_boxes[..., 2]) * 0.5
+        pcy = (pred_boxes[..., 1] + pred_boxes[..., 3]) * 0.5
+        tcx = (target_boxes[..., 0] + target_boxes[..., 2]) * 0.5
+        tcy = (target_boxes[..., 1] + target_boxes[..., 3]) * 0.5
+        rho2 = (pcx - tcx) ** 2 + (pcy - tcy) ** 2
+
+        # Enclosing-box diagonal² (normalisation factor)
+        _, _, _, _, _, _, c2 = _enclosing_box(pred_boxes, target_boxes, eps=eps)
+
+        # Wise focusing coefficient — clamp exponent to avoid overflow
+        beta = torch.exp((rho2 / (c2 + eps)).clamp(max=10.0))
+
+        loss = beta * (1.0 - iou)
+        return _apply_reduction(loss, self.reduction)
+
+
 class AEIoULoss(nn.Module):
     """
     Amorphous-EIoU (A-EIoU) — proposed loss for objects without rigid boundaries.
