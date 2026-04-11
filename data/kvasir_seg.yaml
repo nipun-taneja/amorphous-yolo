@@ -1,0 +1,11 @@
+# Kvasir-SEG — clean validation split
+# 1000 colonoscopy polyp images from the Simula Research Lab dataset.
+# Segmentation masks converted to axis-aligned YOLO bounding boxes.
+# Train: 800 images  |  Val: 200 images (clean labels, no jitter)
+path: /content/amorphous-yolo/datasets/kvasir-seg
+
+train: train/images
+val:   valid/images
+
+names:
+  0: polyp

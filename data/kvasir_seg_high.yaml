@@ -1,0 +1,11 @@
+# Kvasir-SEG — high-noise validation split
+# Validation labels have Gaussian jitter applied: sigma=0.08 (≈8% of image dimension).
+# This simulates severe annotation noise, stress-testing loss robustness.
+# Train: 800 images (clean)  |  Val: 200 images (σ=0.08 bbox jitter)
+path: /content/amorphous-yolo/datasets/kvasir-seg
+
+train: train/images
+val:   valid_high/images
+
+names:
+  0: polyp
