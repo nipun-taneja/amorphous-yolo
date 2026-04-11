@@ -18,13 +18,21 @@ exec(compile(part1_path.read_text(encoding='utf-8'), str(part1_path), "exec"), n
 cells = ns1["cells"]
 print(f"Part 1: {len(cells)} cells loaded.")
 
-# ── Part 2: append cells 16-49 ───────────────────────────────────────────────
+# ── Part 2: append training cells ────────────────────────────────────────────
 part2_path = Path(__file__).parent / "gen_03b.py"
 ns2 = {}
 exec(compile(part2_path.read_text(encoding='utf-8'), str(part2_path), "exec"), ns2)
 add_cells_part2 = ns2["add_cells_part2"]
 add_cells_part2(cells)
 print(f"Part 2: total {len(cells)} cells after append.")
+
+# ── Part 3: append analysis cells ────────────────────────────────────────────
+part3_path = Path(__file__).parent / "gen_03c.py"
+ns3 = {}
+exec(compile(part3_path.read_text(encoding='utf-8'), str(part3_path), "exec"), ns3)
+add_cells_part3 = ns3["add_cells_part3"]
+add_cells_part3(cells)
+print(f"Part 3: total {len(cells)} cells after append.")
 
 # ── Assemble notebook JSON ────────────────────────────────────────────────────
 notebook = {
