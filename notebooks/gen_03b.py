@@ -230,7 +230,9 @@ training progress bar. `[SKIP]` means the run was already completed — safe to 
 
     cells.append(code(
 """# --- Training functions: run_training + write_manifest_entry + sync_to_drive
+# --- + make_epoch_checkpoint_callback (epoch-level Drive sync for mid-run resume)
 import json, shutil
+from pathlib import Path as _Path
 from datetime import datetime
 from ultralytics import YOLO
 
@@ -263,18 +265,36 @@ def sync_to_drive(run_name):
         print(f"  [DRIVE] Sync failed for {run_name}: {e}")
 
 
+def make_epoch_checkpoint_callback(run_name):
+    # Returns an Ultralytics callback that copies last.pt to Drive after every epoch.
+    # Ultralytics calls on_train_epoch_end(trainer) automatically each epoch.
+    # trainer.save_dir points to the run directory (e.g. experiments_kvasir/run_name/).
+    # yolo26n last.pt is ~20 MB — negligible Drive quota per epoch.
+    # This enables mid-run resume: if Colab disconnects at epoch N, the next session
+    # restores last.pt from Drive and calls model.train(resume=True) to continue.
+    def _on_epoch_end(trainer):
+        if not DRIVE_AVAILABLE:
+            return
+        last_pt = _Path(trainer.save_dir) / "weights" / "last.pt"
+        if not last_pt.exists():
+            return
+        drive_weights = DRIVE_EXPERIMENTS / run_name / "weights"
+        drive_weights.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(str(last_pt), str(drive_weights / "last.pt"))
+        except Exception as e:
+            # Non-fatal: training continues even if the epoch sync fails.
+            print(f"  [DRIVE] Epoch checkpoint sync failed at epoch: {e}")
+    return _on_epoch_end
+
+
 def run_training(loss_name, loss_fn, split_name, yaml_path,
                  epochs=None, imgsz=None, device=None):
-    \"\"\"
-    Train one YOLO26n model. Returns the experiment run directory Path.
-
-    Parameters
-    ----------
-    loss_name  : str        Key from loss registry (e.g. 'eiou', 'aeiou_r0p3')
-    loss_fn    : nn.Module  Loss instance to patch into BboxLoss.forward
-    split_name : str        'clean' | 'low' | 'high'
-    yaml_path  : Path       Dataset config YAML file path
-    \"\"\"
+    # Train one YOLO26n model. Returns the experiment run directory Path.
+    # Supports three scenarios transparently:
+    #   1. Fresh start  — no local or Drive checkpoint
+    #   2. Resume       — Drive has last.pt from an interrupted run (no local results.csv)
+    #   3. Skip         — local results.csv exists (run already completed)
     epochs = epochs if epochs is not None else EPOCHS
     imgsz  = imgsz  if imgsz  is not None else IMGSZ
     device = device if device is not None else DEVICE
@@ -288,10 +308,25 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
         print(f"[SKIP] {run_name}")
         return run_dir
 
-    print(f"\\n{'='*70}")
-    print(f"[START] {run_name}")
-    print(f"  loss={loss_name}  split={split_name}  epochs={epochs}")
-    print(f"{'='*70}")
+    # ── Check for a Drive checkpoint from an interrupted run ───────────────────
+    # last.pt on Drive means a previous session started this run but did not finish.
+    # We restore the checkpoint locally so Ultralytics can resume training.
+    drive_last_pt = DRIVE_EXPERIMENTS / run_name / "weights" / "last.pt"
+    resuming = DRIVE_AVAILABLE and drive_last_pt.exists()
+
+    if resuming:
+        print(f"\\n{'='*70}")
+        print(f"[RESUME] {run_name}")
+        print(f"  Checkpoint found on Drive — resuming from last saved epoch")
+        print(f"{'='*70}")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "weights").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(drive_last_pt), str(run_dir / "weights" / "last.pt"))
+    else:
+        print(f"\\n{'='*70}")
+        print(f"[START] {run_name}")
+        print(f"  loss={loss_name}  split={split_name}  epochs={epochs}")
+        print(f"{'='*70}")
 
     # Record intent in manifest before training (status='running')
     # This allows detecting crashed runs that never reached status='complete'
@@ -305,6 +340,7 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
         "results_csv": str(run_dir / "results.csv"),
         "timestamp":   datetime.now().isoformat(),
         "status":      "running",
+        "resumed":     resuming,
     }
     write_manifest_entry(run_name, meta)
 
@@ -319,16 +355,27 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
         # Apply our custom loss to BboxLoss.forward
         patch_loss(loss_fn)
 
-        model = YOLO(MODEL_PT)
-        results = model.train(
-            data=str(yaml_path),
-            epochs=epochs,
-            imgsz=imgsz,
-            project=str(EXPERIMENTS),
-            name=run_name,
-            device=device,
-            exist_ok=True,
-        )
+        if resuming:
+            # Resume training from the restored last.pt checkpoint.
+            # model.train(resume=True) reads all training args from the checkpoint
+            # (data, epochs, imgsz, etc.) — no need to re-specify them.
+            model = YOLO(str(run_dir / "weights" / "last.pt"))
+            model.add_callback("on_train_epoch_end",
+                               make_epoch_checkpoint_callback(run_name))
+            results = model.train(resume=True)
+        else:
+            model = YOLO(MODEL_PT)
+            model.add_callback("on_train_epoch_end",
+                               make_epoch_checkpoint_callback(run_name))
+            results = model.train(
+                data=str(yaml_path),
+                epochs=epochs,
+                imgsz=imgsz,
+                project=str(EXPERIMENTS),
+                name=run_name,
+                device=device,
+                exist_ok=True,
+            )
 
         # Snapshot Ultralytics metadata for offline analysis
         try:
