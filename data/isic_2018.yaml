@@ -1,0 +1,13 @@
+# ISIC 2018 Skin Lesion Detection — clean validation split
+# Task 1: Lesion Segmentation (segmentation masks → bounding boxes)
+# Source: https://challenge.isic-archive.com/data/#2018
+# Images: 2,594 training | 100 validation | 1 class (lesion)
+# Preprocessing: PNG segmentation masks converted to YOLO xywh bounding boxes
+
+path: /content/amorphous-yolo/datasets/isic-2018
+
+train: train/images
+val:   valid/images
+
+names:
+  0: lesion

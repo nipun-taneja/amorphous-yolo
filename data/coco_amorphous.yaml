@@ -1,0 +1,28 @@
+# COCO 2017 — Amorphous-Object Subset (clean validation split)
+# 15 categories selected for their deformable, non-rigid boundaries:
+#   cat, dog, bird, horse, sheep, cow, elephant, bear, zebra, giraffe,
+#   pizza, cake, broccoli, teddy bear, potted plant
+# Used to show AEIoU improves on amorphous objects across a general domain.
+# Download via fiftyone (see notebook 05 for setup).
+
+path: /content/amorphous-yolo/datasets/coco-amorphous
+
+train: train/images
+val:   valid/images
+
+names:
+  0: bird
+  1: cat
+  2: dog
+  3: horse
+  4: sheep
+  5: cow
+  6: elephant
+  7: bear
+  8: zebra
+  9: giraffe
+  10: broccoli
+  11: pizza
+  12: cake
+  13: potted plant
+  14: teddy bear

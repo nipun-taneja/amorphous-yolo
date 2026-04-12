@@ -1,0 +1,11 @@
+# ISIC 2018 Skin Lesion Detection — high-noise validation split
+# Validation labels have Gaussian jitter: sigma=0.08 (~8% of image dimension)
+# Applied independently to cx, cy, w, h coordinates
+
+path: /content/amorphous-yolo/datasets/isic-2018
+
+train: train/images
+val:   valid_high/images
+
+names:
+  0: lesion

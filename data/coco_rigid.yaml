@@ -1,0 +1,27 @@
+# COCO 2017 — Rigid-Object Subset (clean split only — control experiment)
+# 10 categories selected for their rigid, well-defined boundaries:
+#   car, bus, truck, chair, dining table, laptop, tv,
+#   microwave, refrigerator, cell phone
+#
+# PURPOSE: Control group to show AEIoU does NOT hurt performance on rigid objects
+# (or converges to EIoU-level at high lambda). Only clean split is needed —
+# noise robustness is the amorphous dataset's story, not the rigid control's.
+#
+# The key result: AEIoU delta vs EIoU on amorphous-COCO >> delta on rigid-COCO.
+
+path: /content/amorphous-yolo/datasets/coco-rigid
+
+train: train/images
+val:   valid/images
+
+names:
+  0: car
+  1: bus
+  2: truck
+  3: chair
+  4: dining table
+  5: laptop
+  6: tv
+  7: microwave
+  8: refrigerator
+  9: cell phone

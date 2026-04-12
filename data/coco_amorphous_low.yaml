@@ -1,0 +1,24 @@
+# COCO 2017 — Amorphous-Object Subset — low-noise validation split
+# Validation labels have Gaussian jitter: sigma=0.02 (~2% of image dimension)
+
+path: /content/amorphous-yolo/datasets/coco-amorphous
+
+train: train/images
+val:   valid_low/images
+
+names:
+  0: bird
+  1: cat
+  2: dog
+  3: horse
+  4: sheep
+  5: cow
+  6: elephant
+  7: bear
+  8: zebra
+  9: giraffe
+  10: broccoli
+  11: pizza
+  12: cake
+  13: potted plant
+  14: teddy bear
