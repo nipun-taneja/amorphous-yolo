@@ -218,8 +218,9 @@ else:
 # ── Cell 9: Dataset setup ──────────────────────────────────────────────────────
 cells.append(code(
 """# --- Setup CVC-ColonDB from Kaggle input dataset
-# Upload CVC-ColonDB as a Kaggle dataset (images/ + masks/ folders with PNG files).
-# Then attach it via: Add Data -> Your Datasets -> your-cvc-colondb-dataset -> Add
+# Dataset: hannibal93/cvc-colondb on Kaggle
+# Attach via: Add Data -> Search "cvc-colondb" (hannibal93) -> Add
+# Expected Kaggle path: /kaggle/input/cvc-colondb/CVC-ColonDB/images/ + masks/
 import shutil
 from pathlib import Path
 
@@ -230,59 +231,48 @@ def _find_images(d, exts=("*.png", "*.jpg", "*.bmp")):
         imgs.extend(Path(d).glob(ext))
     return sorted(set(imgs), key=lambda p: p.stem)
 
-# ── Auto-detect Kaggle input directory ───────────────────────────────────────
-# CVC-ColonDB structure: images/ + masks/ (both PNG, numeric names 1-380)
-COLONDB_INPUT = None
-orig_dir  = None
-mask_dir  = None
+# ── Recursive scan: find any 'images' dir under /kaggle/input with >=350 PNGs ─
+# Handles any nesting level:
+#   /kaggle/input/cvc-colondb/images/          (flat)
+#   /kaggle/input/cvc-colondb/CVC-ColonDB/images/  (one subdir)
+# Print all input dirs found so user can debug if needed
+print("Scanning /kaggle/input/ for CVC-ColonDB images...")
+import os
+for root, dirs, files in os.walk("/kaggle/input"):
+    print(f"  dir: {root}  ({len(files)} files)")
 
-# Try all /kaggle/input/* directories
-for input_dir in sorted(Path("/kaggle/input").iterdir()):
-    if not input_dir.is_dir():
+orig_dir = None
+mask_dir = None
+
+# Find images/ directory with >=350 images
+for img_dir in sorted(Path("/kaggle/input").rglob("images")):
+    if not img_dir.is_dir():
         continue
-    print(f"Checking: {input_dir}")
-
-    # Candidate image directories
-    for img_cand in [
-        input_dir / "images",
-        input_dir / "CVC-ColonDB" / "images",
-        input_dir,
-    ]:
-        if img_cand.is_dir():
-            imgs = _find_images(img_cand)
-            if len(imgs) >= 350:
-                orig_dir = img_cand
-                print(f"  Found images: {img_cand} ({len(imgs)} files)")
-                break
-
-    if orig_dir is None:
-        continue
-
-    # Candidate mask directories
-    for mask_cand in [
-        input_dir / "masks",
-        input_dir / "CVC-ColonDB" / "masks",
-        input_dir / "Ground Truth",
-        input_dir / "GroundTruth",
-    ]:
-        if mask_cand.is_dir():
-            msks = _find_images(mask_cand)
-            if len(msks) >= 350:
-                mask_dir = mask_cand
-                print(f"  Found masks : {mask_cand} ({len(msks)} files)")
-                break
-
-    if orig_dir and mask_dir:
-        COLONDB_INPUT = input_dir
+    imgs = _find_images(img_dir)
+    if len(imgs) >= 350:
+        orig_dir = img_dir
+        print(f"\\nFound images: {img_dir} ({len(imgs)} files)")
         break
 
+# Find sibling masks/ directory (same parent as images/)
+if orig_dir is not None:
+    parent = orig_dir.parent
+    for mask_name in ["masks", "Masks", "Ground Truth", "GroundTruth", "ground_truth"]:
+        cand = parent / mask_name
+        if cand.is_dir():
+            msks = _find_images(cand)
+            if len(msks) >= 350:
+                mask_dir = cand
+                print(f"Found masks : {cand} ({len(msks)} files)")
+                break
+
 assert orig_dir is not None, (
-    "Could not find CVC-ColonDB images (>=350 PNG files) in /kaggle/input/. "
-    "Please upload CVC-ColonDB as a Kaggle dataset and attach it to this notebook."
+    "Could not find CVC-ColonDB images (>=350 PNG files) under /kaggle/input/. "
+    "Attach the dataset 'hannibal93/cvc-colondb' via Add Data."
 )
 assert mask_dir is not None, (
-    "Found images but could not find CVC-ColonDB masks in /kaggle/input/. "
-    "Ensure your dataset zip contains both images/ and masks/ folders."
+    f"Found images at {orig_dir} but no masks/ sibling with >=350 files. "
+    "Check that your dataset zip contains both images/ and masks/ folders."
 )
 
 # ── Copy to DATASET_ROOT (idempotent) ─────────────────────────────────────────
