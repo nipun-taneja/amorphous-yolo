@@ -532,13 +532,20 @@ def run_training(loss_name, loss_fn, split_name, yaml_path,
     run_dir  = EXPERIMENTS / run_name
 
     csv_path = run_dir / "results.csv"
+    local_last = run_dir / "weights" / "last.pt"
     if csv_path.exists():
         import pandas as _pd
-        if len(_pd.read_csv(csv_path)) >= epochs:
-            print(f"[SKIP] {run_name}"); return run_dir
-
-    local_last = run_dir / "weights" / "last.pt"
-    resuming   = local_last.exists() and not csv_path.exists()
+        n_done = len(_pd.read_csv(csv_path))
+        if n_done >= epochs:
+            print(f"[SKIP] {run_name}  ({n_done}/{epochs} epochs)"); return run_dir
+        # Partial run — Kaggle wrote results.csv but session dropped before finish
+        resuming = local_last.exists()
+        if resuming:
+            print(f"  [PARTIAL] {n_done}/{epochs} epochs done — will RESUME from last.pt")
+        else:
+            print(f"  [RESTART] {n_done}/{epochs} partial epochs, no last.pt — restarting")
+    else:
+        resuming = local_last.exists()
 
     print(f"\\n{'='*68}")
     print(f"[{'RESUME' if resuming else 'START '}] {run_name}")
