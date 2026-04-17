@@ -134,29 +134,54 @@ except Exception as e:
 
 # ── Cell 6: Find PolypGen input ────────────────────────────────────────────────
 cells.append(code(
-"""# Locate PolypGen2021 root under /kaggle/input (any slug/nesting depth)
-# Expected: .../PolypGen2021_MultiCenterData_v3/data_C1/images_C1/ etc.
+"""# Locate PolypGen2021 under /kaggle/input — handles two zip structures:
+#   NESTED: .../data_C1/images_C1/ + data_C1/bbox_C1/   (original PolypGen layout)
+#   FLAT:   .../images_C1/ + bbox_C1/                    (flat zip without data_Cx wrapper)
 from pathlib import Path
 
-PG_ROOT = None
-print("Scanning /kaggle/input for PolypGen2021...")
-for d in sorted(Path("/kaggle/input").rglob("data_C1")):
-    if (d / "images_C1").is_dir() and (d / "bbox_C1").is_dir():
-        PG_ROOT = d.parent  # parent of data_C1 is the dataset root
-        print(f"Found PolypGen root: {PG_ROOT}")
+# Print full tree so you can debug if needed
+print("Scanning /kaggle/input...")
+import os
+for root, dirs, files in os.walk("/kaggle/input"):
+    depth = root.replace("/kaggle/input","").count(os.sep)
+    if depth < 3:  # only show top 3 levels
+        print(f"  {'  '*depth}{Path(root).name}/  ({len(files)} files)")
+
+PG_ROOT  = None   # parent that contains data_C1/ (nested layout)
+PG_FLAT  = None   # parent that contains images_C1/ directly (flat layout)
+
+for d in sorted(Path("/kaggle/input").rglob("images_C1")):
+    if not d.is_dir(): continue
+    parent = d.parent
+    # Check flat: parent directly has images_C1/ and bbox_C1/
+    if (parent / "bbox_C1").is_dir() and len(list((parent/"bbox_C1").glob("*.txt"))) > 0:
+        # Nested layout: parent is data_C1, grandparent is PG_ROOT
+        if parent.name == "data_C1":
+            PG_ROOT = parent.parent
+            print(f"Found NESTED layout: PG_ROOT={PG_ROOT}")
+        else:
+            # Flat layout: parent contains images_C1/ and bbox_C1/ directly
+            PG_FLAT = parent
+            print(f"Found FLAT layout: PG_FLAT={PG_FLAT}")
         break
 
-assert PG_ROOT is not None, (
-    "Could not find PolypGen2021 under /kaggle/input. "
-    "Upload the dataset and attach it. Expected structure: data_C1/images_C1/ + bbox_C1/"
+assert PG_ROOT is not None or PG_FLAT is not None, (
+    "Could not find PolypGen2021 under /kaggle/input.\\n"
+    "Attach the dataset. Zip must contain images_C1/ + bbox_C1/ ... images_C6/ + bbox_C6/."
 )
 
-# Verify all 6 centers
+# Build per-center dir lookup regardless of layout
+def get_center_dirs(c):
+    if PG_ROOT is not None:
+        return PG_ROOT / f"data_{c}" / f"images_{c}", PG_ROOT / f"data_{c}" / f"bbox_{c}"
+    else:
+        return PG_FLAT / f"images_{c}", PG_FLAT / f"bbox_{c}"
+
+print()
 for c in ["C1","C2","C3","C4","C5","C6"]:
-    img_d  = PG_ROOT / f"data_{c}" / f"images_{c}"
-    bbox_d = PG_ROOT / f"data_{c}" / f"bbox_{c}"
-    n_img  = len(list(img_d.glob("*.jpg"))) if img_d.exists() else 0
-    n_bbox = len(list(bbox_d.glob("*.txt"))) if bbox_d.exists() else 0
+    img_d, bbox_d = get_center_dirs(c)
+    n_img  = len(list(img_d.glob("*.jpg")))  if img_d.is_dir()  else 0
+    n_bbox = len(list(bbox_d.glob("*.txt"))) if bbox_d.is_dir() else 0
     print(f"  {c}: imgs={n_img}  bbox_files={n_bbox}")
 """, "pg-find-input"))
 
@@ -186,12 +211,14 @@ else:
     multi_polyp = 0
 
     for c in ["C1","C2","C3","C4","C5","C6"]:
-        img_dir  = PG_ROOT / f"data_{c}" / f"images_{c}"
-        bbox_dir = PG_ROOT / f"data_{c}" / f"bbox_{c}"
+        img_dir, bbox_dir = get_center_dirs(c)
 
         for img_path in sorted(img_dir.glob("*.jpg")):
-            stem    = img_path.stem
-            bbox_f  = bbox_dir / f"{stem}_mask.txt"
+            stem   = img_path.stem
+            # C1/C4/C5/C6 use {stem}_mask.txt; C2/C3 use {stem}.txt — try both
+            bbox_f = bbox_dir / f"{stem}_mask.txt"
+            if not bbox_f.exists():
+                bbox_f = bbox_dir / f"{stem}.txt"
 
             # Skip if no bbox file (C3 gap: 64 images)
             if not bbox_f.exists():
